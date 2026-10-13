@@ -38,6 +38,11 @@ def fmt_pct(value, decimals=2):
     return fmt_num(value * 100, decimals) + '%'
 
 
+def fmt_eur(value, decimals=0):
+    """Сумма в евро: 1 234 567 €."""
+    return fmt_num(value, decimals) + ' €'
+
+
 def make_revenue_fig(selected):
     """Горизонтальный бар Revenue по продуктам, выбранный подсвечен."""
     data = ue[ue['Product'] != TOTAL].sort_values('Revenue')
@@ -45,7 +50,7 @@ def make_revenue_fig(selected):
         COLOR_ACTIVE if selected in (TOTAL, product) else COLOR_INACTIVE
         for product in data['Product']
     ]
-    labels = [fmt_num(value / 1000) + ' тыс' for value in data['Revenue']]
+    labels = [fmt_num(value / 1000) + ' тыс €' for value in data['Revenue']]
 
     fig = go.Figure(go.Bar(
         x=data['Revenue'],
@@ -148,9 +153,9 @@ business_row = html.Div([
     html.Span('Бизнес в целом:',
               style={'color': COLOR_MUTED, 'marginRight': '30px'}),
     business_item('UA', fmt_num(total['UA'])),
-    business_item('AC', fmt_num(total['AC'])),
-    business_item('CPA', fmt_num(total['CPA'], 2)),
-    business_item('CM', fmt_num(total['CM'])),
+    business_item('AC', fmt_eur(total['AC'])),
+    business_item('CPA', fmt_eur(total['CPA'], 2)),
+    business_item('CM', fmt_eur(total['CM'])),
 ], style={'borderTop': '1px solid #E5E4DF',
           'borderBottom': '1px solid #E5E4DF',
           'padding': '8px 0', 'margin': '16px 0', 'fontSize': '15px'})
@@ -232,14 +237,14 @@ def update_dashboard(click_data, *button_clicks):
     ]
 
     return (
-        fmt_num(row['Revenue']),
+        fmt_eur(row['Revenue']),
         'выручка продукта',
         fmt_pct(row['C1']),
         f'B = {fmt_num(row["B"])} покупателей',
-        fmt_num(row['AOV']),
+        fmt_eur(row['AOV']),
         'средний платёж',
         fmt_num(row['APC'], 2),
-        f'CLTV = {fmt_num(row["CLTV"])}',
+        f'CLTV = {fmt_eur(row["CLTV"])}',
         make_revenue_fig(selected),
         make_funnel_fig(selected),
         f'Воронка сделок · {product_name}',
