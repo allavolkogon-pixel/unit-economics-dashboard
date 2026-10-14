@@ -7,9 +7,11 @@ from dash import Dash, Input, Output, ctx, dcc, html
 DATA_DIR = 'data/'
 UE_FILE = 'unit_economics.xlsx'
 FUNNEL_FILE = 'funnel_tableau.xlsx'
+AB_FILE = 'ab_monthly.xlsx'
 
 ue = pd.read_excel(DATA_DIR + UE_FILE)
 funnel = pd.read_excel(DATA_DIR + FUNNEL_FILE)
+ab_monthly = pd.read_excel(DATA_DIR + AB_FILE)
 
 
 TOTAL = 'Итого'
@@ -19,12 +21,32 @@ PRODUCTS = ue.loc[ue['Product'] != TOTAL, 'Product'].tolist()
 BUTTONS = {'btn-all': TOTAL}
 BUTTONS.update({f'btn-{i}': product for i, product in enumerate(PRODUCTS)})
 
+ALL_SOURCES = 'Все источники'
+CHANNELS = [ALL_SOURCES] + sorted(
+    ab_monthly.loc[ab_monthly['Source'] != ALL_SOURCES, 'Source'].unique()
+)
+# id кнопки канала -> значение Source в данных
+CHANNEL_BUTTONS = {f'ch-{i}': channel for i, channel in enumerate(CHANNELS)}
+DROP_MONTH = pd.Timestamp('2024-02-01')
+
 COLOR_ACTIVE = '#7F77DD'
 COLOR_INACTIVE = '#D3D1C7'
 COLOR_FUNNEL = '#5DCAA5'
 COLOR_TEXT = '#2C2C2A'
 COLOR_MUTED = '#73726C'
 FONT = 'Arial, sans-serif'
+
+# оттенки одного цвета для продуктов: выбранный продукт ярче остальных
+PRODUCT_COLORS = ['#534AB7', '#7F77DD', '#AFA9EC']
+CHANNEL_COLORS = {
+    ALL_SOURCES: '#2C2C2A',
+    'Facebook Ads': '#378ADD',
+    'Google Ads': '#1D9E75',
+    'Tiktok Ads': '#EF9F27',
+    'Youtube Ads': '#E24B4A',
+}
+MONTHS_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
+             'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 
 
 def fmt_num(value, decimals=0):
@@ -44,32 +66,33 @@ def fmt_eur(value, decimals=0):
 
 
 def make_revenue_fig(selected):
-    """Горизонтальный бар Revenue по продуктам, выбранный подсвечен."""
-    data = ue[ue['Product'] != TOTAL].sort_values('Revenue')
+    """Кольцевая диаграмма долей продуктов в выручке."""
+    data = ue[ue['Product'] != TOTAL]
     colors = [
-        COLOR_ACTIVE if selected in (TOTAL, product) else COLOR_INACTIVE
-        for product in data['Product']
+        color if selected in (TOTAL, product) else COLOR_INACTIVE
+        for product, color in zip(data['Product'], PRODUCT_COLORS)
     ]
-    labels = [fmt_num(value / 1000) + ' тыс €' for value in data['Revenue']]
+    pull = [0.08 if product == selected else 0 for product in data['Product']]
+    total_mln = fmt_num(data['Revenue'].sum() / 1e6, 2)
 
-    fig = go.Figure(go.Bar(
-        x=data['Revenue'],
-        y=data['Product'],
-        orientation='h',
-        marker_color=colors,
-        text=labels,
-        textposition='outside',
-        textfont=dict(color=COLOR_TEXT, size=13),
-        cliponaxis=False,
-        # 'none' убирает подсказку, но клик работает ('skip' отключает и клик)
-        hoverinfo='none',
+    fig = go.Figure(go.Pie(
+        labels=data['Product'],
+        values=data['Revenue'],
+        hole=0.5,
+        sort=False,
+        pull=pull,
+        marker=dict(colors=colors, line=dict(color='white', width=2)),
+        texttemplate='%{percent:.0%}',
+        textfont=dict(size=14),
+        customdata=[fmt_eur(value) for value in data['Revenue']],
+        hovertemplate='%{label}<br>%{customdata}<extra></extra>',
     ))
     fig.update_layout(
-        margin=dict(l=10, r=70, t=10, b=10),
+        margin=dict(l=10, r=10, t=10, b=10),
         height=260,
-        xaxis=dict(visible=False),
-        yaxis=dict(tickfont=dict(size=14, color=COLOR_TEXT)),
-        plot_bgcolor='white',
+        legend=dict(font=dict(size=13, color=COLOR_TEXT)),
+        annotations=[dict(text=f'{total_mln}<br>млн €', showarrow=False,
+                          font=dict(size=15, color=COLOR_TEXT))],
         paper_bgcolor='white',
         font=dict(family=FONT),
     )
@@ -106,6 +129,56 @@ def make_funnel_fig(selected):
     return fig
 
 
+def make_ab_fig(selected_channel):
+    """Доля лидов A–B по месяцам: выбранный канал цветной, остальные серые."""
+    months = sorted(ab_monthly['month'].unique())
+    order = [ch for ch in CHANNELS if ch != selected_channel]
+    order.append(selected_channel)
+
+    fig = go.Figure()
+    for channel in order:
+        data = ab_monthly[ab_monthly['Source'] == channel].sort_values('month')
+        active = channel == selected_channel
+        color = CHANNEL_COLORS[channel] if active else COLOR_INACTIVE
+        fig.add_trace(go.Scatter(
+            x=data['month'],
+            y=data['ab_share'],
+            name=channel,
+            mode='lines+markers',
+            line=dict(color=color, width=3.5 if active else 1.5),
+            marker=dict(color=color, size=8 if active else 5),
+            customdata=data[['ab', 'deals']],
+            hovertemplate=('%{y:.1%} (%{customdata[0]} из %{customdata[1]})'
+                           f'<extra>{channel}</extra>'),
+        ))
+
+    fig.add_vline(x=DROP_MONTH, line=dict(color=COLOR_MUTED, width=1,
+                                          dash='dash'))
+    fig.add_annotation(x=DROP_MONTH, y=1, yref='paper', yanchor='bottom',
+                       xanchor='left', showarrow=False,
+                       text=' фев 2024: падение во всех каналах',
+                       font=dict(size=12, color=COLOR_MUTED))
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=340,
+        showlegend=False,
+        hovermode='x unified',
+        xaxis=dict(
+            tickvals=months,
+            ticktext=[f'{MONTHS_RU[m.month - 1]} {m.year}'
+                      for m in pd.to_datetime(months)],
+            range=[months[0] - pd.Timedelta(days=15),
+                   months[-1] + pd.Timedelta(days=15)],
+            showgrid=False,
+        ),
+        yaxis=dict(tickformat='.0%', gridcolor='#EEEDE8', rangemode='tozero'),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family=FONT, color=COLOR_TEXT),
+    )
+    return fig
+
+
 STYLE_PAGE = {
     'fontFamily': FONT, 'maxWidth': '1100px', 'margin': '0 auto',
     'padding': '20px', 'backgroundColor': 'white', 'color': COLOR_TEXT,
@@ -118,6 +191,10 @@ STYLE_BUTTON = {
 STYLE_BUTTON_ACTIVE = {
     **STYLE_BUTTON, 'backgroundColor': COLOR_ACTIVE,
     'border': f'1px solid {COLOR_ACTIVE}', 'color': 'white',
+}
+STYLE_CHANNEL = {
+    **STYLE_BUTTON, 'padding': '5px 12px', 'fontSize': '13px',
+    'borderRadius': '999px', 'marginBottom': '6px',
 }
 STYLE_ROW = {'display': 'flex', 'gap': '20px'}
 STYLE_PANEL = {
@@ -175,7 +252,7 @@ kpi_row = html.Div([
 
 charts_row = html.Div([
     html.Div([
-        html.Div('Revenue по продуктам · клик = фильтр',
+        html.Div('Доля продуктов в выручке · клик = фильтр',
                  style=STYLE_PANEL_TITLE),
         dcc.Graph(id='revenue-graph', config={'displayModeBar': False}),
     ], style=STYLE_PANEL),
@@ -184,6 +261,31 @@ charts_row = html.Div([
         dcc.Graph(id='funnel-graph', config={'displayModeBar': False}),
     ], style=STYLE_PANEL),
 ], style=STYLE_ROW)
+
+channel_buttons = html.Div([
+    html.Button([
+        html.Span(style={
+            'display': 'inline-block', 'width': '9px', 'height': '9px',
+            'borderRadius': '50%', 'marginRight': '6px',
+            'backgroundColor': CHANNEL_COLORS[channel],
+        }),
+        channel,
+    ], id=btn_id, n_clicks=0, style=STYLE_CHANNEL)
+    for btn_id, channel in CHANNEL_BUTTONS.items()
+])
+
+ab_panel = html.Div([
+    html.Div('Доля лидов A–B по месяцам создания сделки', style={
+        **STYLE_PANEL_TITLE, 'display': 'inline-block', 'marginRight': '12px',
+    }),
+    html.Span('Поток лидов: до выбора продукта, кнопки продуктов '
+              'не действуют',
+              style={'fontSize': '12px', 'color': COLOR_MUTED,
+                     'border': '1px solid #E5E4DF', 'borderRadius': '999px',
+                     'padding': '2px 10px'}),
+    channel_buttons,
+    dcc.Graph(id='ab-graph', config={'displayModeBar': False}),
+], style={**STYLE_PANEL, 'marginTop': '20px'})
 
 DASHBOARD_TITLE = 'Анализ юнит-экономики и воронки продаж'
 
@@ -199,7 +301,7 @@ footnote = html.Div(
 app = Dash(__name__)
 app.title = DASHBOARD_TITLE
 app.layout = html.Div(
-    [header, buttons, business_row, kpi_row, charts_row, footnote],
+    [header, buttons, business_row, kpi_row, charts_row, ab_panel, footnote],
     style=STYLE_PAGE,
 )
 
@@ -225,7 +327,7 @@ def update_dashboard(click_data, *button_clicks):
     if trigger in BUTTONS:
         selected = BUTTONS[trigger]
     elif trigger == 'revenue-graph' and click_data:
-        selected = click_data['points'][0]['y']
+        selected = click_data['points'][0]['label']
     else:
         selected = TOTAL
 
@@ -250,6 +352,22 @@ def update_dashboard(click_data, *button_clicks):
         f'Воронка сделок · {product_name}',
         *button_styles,
     )
+
+
+@app.callback(
+    Output('ab-graph', 'figure'),
+    *[Output(btn_id, 'style') for btn_id in CHANNEL_BUTTONS],
+    *[Input(btn_id, 'n_clicks') for btn_id in CHANNEL_BUTTONS],
+)
+def update_ab(*channel_clicks):
+    selected = CHANNEL_BUTTONS.get(ctx.triggered_id, ALL_SOURCES)
+    channel_styles = [
+        {**STYLE_CHANNEL, 'border': f'1px solid {COLOR_TEXT}',
+         'fontWeight': 'bold'}
+        if channel == selected else STYLE_CHANNEL
+        for channel in CHANNEL_BUTTONS.values()
+    ]
+    return make_ab_fig(selected), *channel_styles
 
 
 # Для хостинга: gunicorn запускает Flask-сервер, который лежит внутри Dash
